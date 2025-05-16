@@ -7,7 +7,7 @@ echo "this installer script will ask you few questions"
 #check for root
 if [[ $((EUID)) -ne 0 ]] 
 then 
-	echo "please run this script using "sudo obsidian_installer""
+	echo "please run this script using \"sudo obsidian_installer\""
 	exit
 
 fi
