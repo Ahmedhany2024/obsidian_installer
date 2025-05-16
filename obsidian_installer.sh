@@ -1,6 +1,6 @@
 #!/bin/bash
 #a7la samlam 3la elmostakhdem
-cat /home/hash/Downloads/'Telegram Desktop'/ascii.txt
+cat ascii.txt
 echo "welcome to obsidian os"
 echo "this installer script will ask you few questions"
 
