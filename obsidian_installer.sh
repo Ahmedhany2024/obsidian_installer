@@ -171,6 +171,8 @@ fi
 
 grub-mkconfig -o /boot/grub/grub.cfg
 
+umount -R /mnt
+
 echo "installation complete.."
 
 echo "please set your user and root password before rebooting"
