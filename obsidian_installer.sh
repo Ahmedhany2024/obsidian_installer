@@ -1,190 +1,155 @@
 #!/bin/bash
-#a7la samlam 3la elmostakhdem
+set -e
+
+# a7la salām 3ala elmostakhdem
 cat ascii.txt
-echo "welcome to obsidian os"
-echo "this installer script will ask you few questions"
+echo "Welcome to Obsidian OS"
+echo "This installer script will ask you a few questions"
 
-#check for root
-if [[ $((EUID)) -ne 0 ]] 
-then 
-	echo "please run this script using "sudo obsidian_installer""
-	exit
-
+# Check for root
+if [[ $EUID -ne 0 ]]; then
+    echo "Please run this script using: sudo ./obsidian_installer.sh"
+    exit 1
 fi
 
-#partitioning
-echo "do you like to set your partitions manually or automatically?"
-read -p "choose 0 for manual partitioning ,and 1 for automatic partition: " part_mode
+# Partitioning choice
+echo "Do you want to set your partitions manually or automatically?"
+read -p "Choose 0 for manual partitioning, and 1 for automatic partitioning: " part_mode
 
-if [[ $part_mode -eq 0 ]]
-then
- 
-	echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $1}')
-	echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $2}')
-        echo "/dev/sda or /dev/sdb means hdd or sata ssd or usb_drive"
-        echo "/dev/nvme means nvme ssd"
-	read -p "please choose the drive to work with:" choosen_disk
-sudo cfdisk /dev/$choosen_disk
+# List available disks
+echo "Available Disks:"
+lsblk -d -e 7,11 -o NAME,SIZE,TYPE
 
-elif [[ $part_mode -eq 1 ]]
-then
+read -p "Please choose the drive to install on (e.g. sda or nvme0n1): " choosen_disk
+disk_path="/dev/$choosen_disk"
 
-        echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $1}')
-        echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $2}')
-        read -p "choose the device to install on : " choosen_disk 
-        choosen_disk_auto=/dev/$choosen_disk
-        echo $choosen_disk
-
+# Boot mode detection
+if [[ -d /sys/firmware/efi ]]; then
+    echo "System is UEFI"
+    boot_mode="uefi"
 else
-echo "wrong option"
-
+    echo "System is BIOS-mode"
+    boot_mode="bios"
 fi
 
-#check for boot mode if bios or UEFI
-if [[ -d /sys/firmware/efi ]] 
-then
-echo "system is uefi"
-boot_mode = "uefi"
+if [[ $part_mode -eq 0 ]]; then
+    # Manual partitioning
+    cfdisk "$disk_path"
 
-else
-echo "system is bios-mode"
-boot_mode = "bios"
+    if [[ $boot_mode == "uefi" ]]; then
+        efi_found=false
+        parted -m "$disk_path" print | while IFS=: read -r num start end size fs type flags; do
+            if [[ "$fs" == "fat32" && "$flags" == *"boot"* ]]; then
+                efi_found=true
+                break
+            fi
+        done
 
-fi
+        if ! $efi_found; then
+            echo "Please create and flag an EFI partition"
+            exit 1
+        fi
 
-#partioning for automatic mode
-if [[ $part_mode -eq 1 ]] && [[ $boot_mode == "bios" ]]
-then 
-parted $choosen_disk --script mklabel msdos
-parted $choosen_disk --script mkpart primary ext4 1MiB 100%
-mkfs.ext4 $choosen_disk
-mount $choosen_disk /mnt
+        lsblk
+        read -p "Enter the EFI partition (e.g., sda1): " boot_part
+        read -p "Enter the root partition (e.g., sda2): " root_part
+        mount "/dev/$root_part" /mnt
+        mount --mkdir "/dev/$boot_part" /mnt/boot
 
-elif [[ $boot_mode == "uefi" ]]
-then
-	parted --script $choosen_disk mkpart ESP fat32 1MiB 513MiB
-        parted --script $choosen_disk set 1 esp on
-        parted --script $choosen_disk mkpart primary ext4 513MiB 100%
-	#formating efi partition
-	mkfs.fat -F32 "$choosen_disk"1 
-        #formating root partition
-	mkfs.ext4 "$choosen_disk"2
-	mount "$choosen_disk"2 /mnt
-	mount --mkdir "$choosen_disk"1 /mnt/boot
-
-
-fi
-
-#partioting for offline installer
-if [[ $part_mode -eq 0 ]] && [[ $boot_mode == "uefi" ]]
-efi_found=false
-
-parted -m "choosen_disk" print | while IFS=: read -r num start end size fs type flags; do
-    if [[ "$fs" == "fat32" && "$flags" == "boot" ]]; then
-        efi_found=true
-        break
+    else
+        lsblk
+        read -p "Enter the root partition (e.g., sda1): " root_part
+        mkfs.ext4 "/dev/$root_part"
+        mount "/dev/$root_part" /mnt
     fi
-done
 
-if ! $efi_found
-then
-	echo "please create or flag the boot partition"
-	exit 1
+elif [[ $part_mode -eq 1 ]]; then
+    echo "Automatic partitioning on $disk_path"
+
+    if [[ $boot_mode == "bios" ]]; then
+        parted "$disk_path" --script mklabel msdos
+        parted "$disk_path" --script mkpart primary ext4 1MiB 100%
+        mkfs.ext4 "${disk_path}1"
+        mount "${disk_path}1" /mnt
+
+    elif [[ $boot_mode == "uefi" ]]; then
+        parted "$disk_path" --script mklabel gpt
+        parted "$disk_path" --script mkpart ESP fat32 1MiB 513MiB
+        parted "$disk_path" --script set 1 esp on
+        parted "$disk_path" --script mkpart primary ext4 513MiB 100%
+
+        boot_part="${disk_path}p1"
+        root_part="${disk_path}p2"
+        [[ "$disk_path" =~ sd ]] && boot_part="${disk_path}1" && root_part="${disk_path}2"
+
+        mkfs.fat -F32 "$boot_part"
+        mkfs.ext4 "$root_part"
+        mount "$root_part" /mnt
+        mount --mkdir "$boot_part" /mnt/boot
+    fi
+
+else
+    echo "Invalid partitioning option."
+    exit 1
 fi
 
-lsblk
-
-read -p "what partition did you used for boot?? ,pls type its name" boot_part
-read -p "what partition did you used for root?? ,pls type its name" root_part
-
-mount $root_part /mnt/
-mount --mkdir  $boot_part /mnt/boot/
-
-elif [[ $boot_mode == "bios" ]]
-then
-	lsblk
-	read -p "what partition did you use for root" root_part
-	mkfs.ext4 $root_part
-	mount $root_part /mnt
-
-fi
-
-#finally i have finished the partitioning
-
-#copying the root files
-
+# Base file copy
+echo "Copying system files..."
 rsync -aAXv / --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*","/media/*","/lost+found"} /mnt
 
+# Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-arch-chroot /mnt
+# Timezone setup
+echo "Available time zones are in /usr/share/zoneinfo"
+read -p "Enter your time zone (e.g., Africa/Cairo): " zone
 
-#setting time zone
-echo "available time zones can be found in /usr/share/zoneinfo"
-read -p "enter your time zone ,for example (Cairo): " zone
-
-if [ -f "/mnt/usr/share/zoneinfo/$zone" ] 
-then
-    ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
-    hwclock --systohc
-    echo "Timezone set to $zone"
-  else
-    echo "Invalid time zone: "
+if [[ -f "/usr/share/zoneinfo/$zone" ]]; then
+    ln -sf "/usr/share/zoneinfo/$zone" "/mnt/etc/localtime"
+else
+    echo "Invalid timezone path. Please double-check and try again."
     ls /usr/share/zoneinfo
-    read -p "please search for your timezone and type it correctly" zone
-    ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
-    hwclock --systohc
-    echo "Timezone set to $zone"
+    exit 1
 fi
-#generating locales
-echo "generating locales..."
+
+# Hostname and locale
+read -p "Enter your desired hostname: " hostname
+echo "$hostname" > /mnt/etc/hostname
+
+cat <<EOF > /mnt/etc/locale.gen
+en_US.UTF-8 UTF-8
+EOF
+
+cat <<EOF > /mnt/etc/locale.conf
+LANG=en_US.UTF-8
+EOF
+
+# Prepare user in chroot
+read -p "Enter your new username: " username
+
+arch-chroot /mnt /bin/bash <<EOF
 locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
-
-#host-name
-
-read -p "please enter the hostname(what whould you like to name this pc" hostname
-
-echo $hostname >> /etc/hostname
-
-
-#add user
-
-read -p "enter your name" username
-
-useradd -m -G wheel -s /bin/bash $username
-
-#mkinitcpio 
+ln -sf "/usr/share/zoneinfo/$zone" /etc/localtime
+hwclock --systohc
+useradd -m -G wheel -s /bin/bash "$username"
+echo "Set the password for user and root now:"
+passwd
+passwd $username
 mkinitcpio -P
 
-if [[ $boot_mode == "uefi" ]]
-then
-	grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=obsidian
-
-elif [[ $boot_mode == "bios" ]]
-then 
-	grub-install --target=i386-pc $choosen_disk
+if [[ "$boot_mode" == "uefi" ]]; then
+    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=obsidian
 else
-	echo "bootloader installation failed"
-	exit 1
+    grub-install --target=i386-pc "$disk_path"
 fi
 
 grub-mkconfig -o /boot/grub/grub.cfg
+EOF
 
+# Finalizing
 umount -R /mnt
-
-echo "installation complete.."
-
-echo "please set your user and root password before rebooting"
-
-echo "(passwd root),for changing root password"
-
-echo "(passwd $user_name),for changing user password"
-
-echo "after setting your passwords, you can reboot by typing (reboot) in your terminal"
-
-exit
-
+echo "Installation complete."
+echo "You can now reboot the system using: reboot"
 
 
 
