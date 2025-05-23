@@ -5,10 +5,10 @@ echo "welcome to obsidian os"
 echo "this installer script will ask you few questions"
 
 #check for root
-if [[ $((EUID)) -ne 0 ]] 
+if [[ $EUID -ne 0 ]] 
 then 
-	echo "please run this script using "sudo obsidian_installer""
-	exit
+	echo 'please run this script using "sudo obsidian_installer"'
+	exit 1
 
 fi
 
@@ -19,8 +19,7 @@ read -p "choose 0 for manual partitioning ,and 1 for automatic partition: " part
 if [[ $part_mode -eq 0 ]]
 then
  
-	echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $1}')
-	echo $(lsblk -d -e 7,11 -o NAME,SIZE,TYPE | awk '$3=="disk" {print $2}')
+	lsblk -d -e 7,11 -o NAME,SIZE,TYPE 
         echo "/dev/sda or /dev/sdb means hdd or sata ssd or usb_drive"
         echo "/dev/nvme means nvme ssd"
 	read -p "please choose the drive to work with:" choosen_disk
@@ -44,11 +43,11 @@ fi
 if [[ -d /sys/firmware/efi ]] 
 then
 echo "system is uefi"
-boot_mode = "uefi"
+boot_mode="uefi"
 
 else
 echo "system is bios-mode"
-boot_mode = "bios"
+boot_mode="bios"
 
 fi
 
@@ -117,7 +116,7 @@ rsync -aAXv / --exclude={"/dev/*","/proc/*","/sys/*","/tmp/*","/run/*","/mnt/*",
 
 genfstab -U /mnt >> /mnt/etc/fstab
 
-arch-chroot /mnt
+arch-chroot /mnt /bin/bash <<EOF
 
 #setting time zone
 echo "available time zones can be found in /usr/share/zoneinfo"
@@ -136,7 +135,7 @@ then
     hwclock --systohc
     echo "Timezone set to $zone"
 fi
-#generating locales
+#generating locale
 echo "generating locales..."
 locale-gen
 echo "LANG=en_US.UTF-8" > /etc/locale.conf
@@ -153,10 +152,13 @@ echo $hostname >> /etc/hostname
 read -p "enter your name" username
 
 useradd -m -G wheel -s /bin/bash $username
+userdel -r live
+#copy the kernel
 
-#mkinitcpio 
+cp -r /run/archiso/bootmnt/boot/x86_64/vmlinuz-linux /boot
+cp -r /usr/share/obsidian-mkinitcpio.config/* /etc/
+#mkinitcpio
 mkinitcpio -P
-
 if [[ $boot_mode == "uefi" ]]
 then
 	grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=obsidian
@@ -171,18 +173,27 @@ fi
 
 grub-mkconfig -o /boot/grub/grub.cfg
 
-umount -R /mnt
 
 echo "installation complete.."
 
 echo "please set your user and root password before rebooting"
 
-echo "(passwd root),for changing root password"
+passwd root
 
-echo "(passwd $user_name),for changing user password"
+passwd $username
 
-echo "after setting your passwords, you can reboot by typing (reboot) in your terminal"
+EOF
+echo "after setting your passwords, you can reboot the system"
+read -p "do you like to restart your pc ?? ,answer with 1 for yes and 0 for no" restart1
 
+if [[ $restart1 == '1' ]]
+then 
+	umount -R /mnt
+	reboot
+elif [[ $restart1 == '0' ]]
+then 
+	umount -R /mnt
+fi
 exit
 
 
